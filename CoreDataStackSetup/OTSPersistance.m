@@ -1,14 +1,14 @@
-#import "OTSDatabaseManager.h"
+#import "OTSPersistance.h"
 @import CoreData;
 
-@interface OTSDatabaseManager()
+@interface OTSPersistance()
 
 @property (strong, nonatomic) NSManagedObjectContext *mainThreadManagedObjectContext;
 @property (strong, nonatomic) NSManagedObjectContext *saveManagedObjectContext;
 
 @end
 
-@implementation OTSDatabaseManager
+@implementation OTSPersistance
 
 - (void)setupCoreDataStackWithCompletionHandler:(OTSDatabaseManagerStackSetupCompletionHandler)handler {
   if ([self saveManagedObjectContext]) return;
@@ -40,6 +40,7 @@
   
   NSManagedObjectContext *mainThreadMoc = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSMainQueueConcurrencyType];
   [mainThreadMoc setParentContext:[self saveManagedObjectContext]];
+//  [mainThreadMoc setPersistentStoreCoordinator:psc];
   [self setMainThreadManagedObjectContext:mainThreadMoc];
 
   dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
@@ -70,6 +71,31 @@
       });
     }
   });
+}
+
+- (NSManagedObjectContext*)privateContext
+{
+    NSManagedObjectContext *managedObjectContext = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSPrivateQueueConcurrencyType];
+    managedObjectContext.persistentStoreCoordinator = self.mainThreadManagedObjectContext.persistentStoreCoordinator;
+    [managedObjectContext setUndoManager:nil];
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center addObserver:self
+               selector:@selector(contextDidSave:)
+                   name:NSManagedObjectContextDidSaveNotification
+                 object:managedObjectContext];
+    return managedObjectContext;
+}
+
+- (void)contextDidSave:(NSNotification*)notification {
+    NSManagedObjectContext *moc = self.mainThreadManagedObjectContext;
+    void (^mergeChanges) (void) = ^ {
+        [moc mergeChangesFromContextDidSaveNotification:notification];
+    };
+    if ([NSThread isMainThread]) {
+        mergeChanges();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), mergeChanges);
+    }
 }
 
 - (void)saveDataWithCompletionHandler:(OTSDatabaseManagerSaveCompletionHandler)handler
